@@ -1,0 +1,499 @@
+---
+title: "Seattle Police Crime Markdown"
+author: "Eren Uslu | usle00@vse.cz"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+##  **Overview & Description of dataset**
+
+This data represents  crime reported to the Seattle Police Department (SPD). Each row contains the record of a unique event where at least one criminal offense was reported by a member of the community or detected by an officer in the field. The Dataset is used in meetings for strategic planning, accountability and performance managment. This updated process includes all records of crime reports logged in the Departments Records Management System (RMS) since 2008, which are tracked as part of the SeaStat process. Records are evolved daily and are continually refreshed.
+
+The dataset was provided by OpenML. The author is the City of Seattle.
+
+&bull; For more information visit: https://data.seattle.gov/Public-Safety/Crime-Data/4fs7-3vj5
+
+&bull; Access to the OpenML project: https://www.openml.org/d/41960 
+
+## **Problem statement & Goal**
+
+The goal is to build a ML model that will predict the accuracy for an Primary Offense by a given of all other feature variables (e.g. Neighborhood, Beat, etc.)
+
+&bull; **Target** is Primary Offense Description
+
+&bull; **Features** are the other remaining 8 variables
+
+* Report Number (1)
+* Occured Time (2)
+* Reported Time (3)
+* Crime Subcategory (4)
+* Precinct (5)
+* Sector (6)
+* Beat (7)
+* Neighborhood (8)
+
+## **Structure** 
+
+The structure and steps are similar to the one of the Python notebook. Tips and suggestion of the received review report are included in this project.
+
+```{r}
+install.packages("corrplot", repos = "http://cran.us.r-project.org")
+install.packages("Hmisc", repos = "http://cran.us.r-project.org")
+install.packages("corrgram", repos ="http://cran.us.r-project.org")
+```
+
+
+## **Setup & Prerequisites** 
+
+In order to to build the model and to the classification all necessary R packages have to be installed & loaded.
+**Note:** If one of the packaged don't load use require(package)
+
+```{r message=FALSE, warning=FALSE}
+# Setup and loading needful & necessary libraries 
+library(caret)
+library(dplyr)
+library(e1071)
+library(Hmisc)
+library(ggplot2)
+library(corrplot)
+library(corrgram)
+library(knitr)
+library(MASS)
+library(ranger)
+library(tidyverse)
+```
+
+## **Exploratory data analysis**
+
+Importing the dataset and displaying the data with its structure to perform the analysis and classification task
+
+### Loading Seattle Police Crime Dataset
+
+The Seattle Police Crime Dataset is been loaded and saved into a variable. The dataset is been directly imported from the OpenML website with its provided .arff file
+
+```{r}
+crime_data <- read.csv("https://www.openml.org/data/get_csv/21379024/Seattle_Crime_Data_06-23-2019-4.arff")
+
+# If any problem is occuring during the loading process, you have the option the load the dataset from the provided excel sheet. Therefore just switch use your active working directoy and read the .csv file --> setwd() --> crime_data <- read.csv(file = "Seattle_Crime_Data_06-23-2019-4.csv")
+
+head(crime_data, n=10) # head displays the first 10 rows of the dataset
+```
+Each row is a **unique crime report record column in the dataset**
+
+&bull; **Report Number** = Unique ID
+
+&bull; **Occured Time** = Time the offense occured on the 24 hour clokc
+
+&bull; **Reported Time** = Time the offense has been reported on the 24 hour clock
+
+&bull; **Crime Subcategory** = More detailed description of the Primary Offense
+
+&bull; **Primary Offense** = Description of the occured offense
+
+&bull; **Precinct** = District where offense occured
+
+&bull; **Sector** = Sector of the district
+
+&bull; **Beats** = Granular unit of management for patrol deployment
+
+&bull; **Neighborhood** = Location of the occured offense
+
+**Note: The Dataset doesn't provide any dates**
+
+
+```{r}
+str(crime_data) # Display structure and shape of the dataset
+```
+
+&bull; 523590 = Total number of data
+
+&bull; 9 = Number of columns (1 target and 8 feature variables)
+
+The head of the dataset doesn't show any **NaN (Not a Number) or NA (Not available)** values. Although it seems like no data is missing from the columns, it is clear from the first few rows that there are values corresponding to missing **'?' and 'UNKNOWN'**
+
+Before converting the missing values **'?' and 'UNKNOWN'** lets check if there is any *NA* value at all in the dataset.
+
+```{r}
+colSums(is.na(crime_data)) # Cumulate the sum of NA values for each of the nine columns
+```
+
+The resuls show that no column has **NA** values
+
+## **Preprocessing**
+
+### Data preperation - Handling missing data
+
+Before using the dataset for classification purposes missing data has to be handled and either removed or replaced.
+
+Since no **NA** values where found let's see how many missing values in form of **?** and **UNKNOWN** occur in the dataset
+
+```{r}
+# Count the number of '?' and 'UNKNOWN' entries with the sum() operation
+sum(length(which(crime_data == "?")), length(which(crime_data == "UNKNOWN")))
+```
+
+13628 values where found which have **? or UNKNOWN** entries
+
+In order to treat mis sing data properly, the missing values have to replaced using **NA** to find and handle missing values faster
+
+```{r}
+crime_data[crime_data == "?"] <- NA # All '?' values are being replaced with 'NA'
+crime_data[crime_data == "UNKNOWN"] <- NA # All 'UNKNOWN' are being replaced with 'NA'
+```
+
+Now check the number of **NA** values for each column again
+
+```{r}
+colSums(is.na(crime_data)) # Cumulate the sum of NA values for each of the nine columns
+```
+
+It is clearly visible that the column **Sector, Crime Subcategory, and Beat** have to the most missing values while the others have none or just a few
+
+Finally, the missing **NA** values are being dropped. Since the amount of dropped values is not critical and replacing/inmuting the **NA** values makes no sense due to reason of having multiple, labeled entries for each column the data handling for missing values ends here.
+
+```{r}
+crime_data <- na.omit(crime_data) # Rows with 'NA' values are being dropped
+```
+
+```{r}
+colSums(is.na(crime_data)) # Cumulate the sum of NA values for each of the nine columns
+
+sum(length(which(crime_data == "?")), length(which(crime_data == "UNKNOWN")), is.na(crime_data)) # Cumulate the number of missing values for '?', 'UNKNOWN', and 'NA'
+```
+
+## Data preperation - Label sizing
+
+### Data transformation
+Since the dataset has more than 500.000 entries it more convenient and beneficial to transform and group the entries from the target variable **Primary Description**
+
+Firstly, the number of unique value needs to be computated
+
+```{r}
+length(unique(crime_data$Primary_Offense_Description)) # Computate the number of unique values
+```
+
+In total the target variable has 142 unique values
+
+### Create of new column **Response Time**
+
+To better understand the dataset we decided to create a new column “Response time”. This column should have demonstrated the time between the time of crime and the time of the reporting of that crime. Unfortunately, the dataset does not contain any dates. So we don’t know whether the crime was reported on the same day or maybe a day after. Therefore sometimes negative Response Times are being displayed.
+
+```{r}
+# Create new Column 'Response Time' by subtracting 'Reportied Time - Occured Time'
+crime_data$Response_Time <- as.numeric(as.character(crime_data$Occurred_Time)) - as.numeric(as.character(crime_data$Reported_Time))
+#  Note: Negative Values appear due to the lack of dates
+```
+```{r}
+head(crime_data, n=10) # display first ten rows with new column
+```
+
+### Sub-categories/Group Primary Offense
+
+Before grouping the target variable **Primary Offense** into the three sub categories **THEFT, DRUGS AND GUNS, AND OTHERS** a subset is being created
+
+```{r}
+# Create subset and replace 'Primary Offense Description' label with 'Sub Crime'
+crime_data_sub = crime_data
+crime_data_sub["Sub_Crime"] = crime_data["Primary_Offense_Description"]
+```
+
+```{r}
+crime_data_sub$Sub_Crime <- sub(".*THEFT.+|.*BURGLARY.+|.*ROBBERY.+", "THEFT", crime_data_sub$Sub_Crime) # Create first subcategory 'THEFT'
+crime_data_sub$Sub_Crime <- sub(".*THEFT.+|.*NARC.+|.*DRUG.+,|.*WEAPON.+", "DRUGS_AND_GUNS", crime_data_sub$Sub_Crime) # Create second subcategory 'DRUGS AND GUNS'
+crime_data_sub$Sub_Crime[!grepl("THEFT|DRUGS_AND_GUNS", crime_data_sub$Sub_Crime)] <- "OTHERS" # Create third subcategory 'OTHERS'
+```
+
+The 142 unique values from the Primary Offense were grouped in the three sub-caregories **THEFT, DRUGS AND GUNS, and OTHERS**. 
+
+The frequency of each sub-category is being computated.
+
+```{r}
+sub_crime_category <- as.data.frame(table(crime_data_sub$Sub_Crime))
+sub_crime_category <- data.frame(c("THEFT","DRUGS_AND_GUNS","OTHERS"), sub_crime_category$Freq)
+colnames(sub_crime_category) <-c("Primary_Offense_Sub_Category", "Frequency")
+sub_crime_category
+```
+
+The frequency of the sub-categories are being visualized
+
+```{r}
+ggplot(sub_crime_category, aes(x="Primary Offense Sub Category", y=Frequency, fill=Primary_Offense_Sub_Category)) +
+  geom_bar(stat="identity", width=1, color="white") +
+  coord_polar("y", start=0) +
+  theme_void() +
+  geom_text(aes(label = Frequency, x =2), color="black", size=5)
+```
+
+Not all features are necessary for the classification task. Not needed columns are being dropped
+```{r}
+crime_class <- crime_data_sub[c("Occurred_Time","Crime_Subcategory", "Precinct", "Sector", "Beat", "Neighborhood", "Sub_Crime")]
+head(crime_class, n=10)
+```
+
+## Label Encoding
+
+Label Encoding refers to converting the labels into numeric form so as to convert it into the machine-readable form. This is a better way on how those non numeric columns must be operated.
+
+For the the classification task only float or integer data types are being accepted. Therefore, object data must be encode to integer datatypes.
+
+Categorical text data is being converted into readable numeric data using Label Encoding class
+
+```{r}
+crime_class$Occurred_Time<-as.numeric(as.factor(crime_class$Occurred_Time))
+crime_class$Crime_Subcategory<-as.numeric(as.factor(crime_class$Crime_Subcategory))
+crime_class$Precinct<-as.numeric(as.factor(crime_class$Precinct))
+crime_class$Sector<-as.numeric(as.factor(crime_class$Sector))
+crime_class$Beat<-as.numeric(as.factor(crime_class$Beat))
+crime_class$Neighborhood<-as.numeric(as.factor(crime_class$Neighborhood))
+crime_class$Sub_Crime<-as.factor(as.character(crime_class$Sub_Crime))
+```
+
+## Random Sampling
+
+Random sampling is a sampling technique where every item in the population has an even chance and likelihood of being selected in the sample. In this dataset this means running over more than 500.000 takes to much time and ressources. Sampling data reduces computation time and reduce the observed data size. **10% (50.000 rows)** of the data is randomly being sampled
+
+```{r}
+crime_random_sample <- crime_class[sample(nrow(crime_class), 50000, replace = FALSE, prob=NULL),]
+```
+
+## Data shuffling
+
+Shuffling data serves the purpose of reducing variance and making sure that models remain general and overfit less. Data shuffling helps to improve ML model quality and improve the predictive performance
+
+```{r}
+data_shuffle <- nrow(crime_random_sample)
+p_rows <- sample(data_shuffle)
+crime_shuffle <- crime_class[p_rows,]
+```
+
+## Data splitting
+
+Data splitting is the act of partitioning available data into. two portions, usually for cross-validatory purposes. One. portion of the data is used to develop a predictive model. and the other to evaluate the model's performance.
+
+The dataset is splitted into a train dataset with **75%** and a test dataset with **25%** of all sampled observations
+
+```{r}
+# Model fitting
+crime_split <- round(data_shuffle * 0.75)
+crime_train <- crime_shuffle[1:crime_split,]
+crime_test <- crime_shuffle[(crime_split+1):nrow(crime_shuffle),]
+```
+
+## Model Building - Classification Task
+
+A recommendation to use which algorithm can be found here: https://scikit-learn.org/stable/tutorial/machine_learning_map/index.html
+
+# 1. KNN-Algorithm
+
+First a seed needs to be set in order to make results replicable
+
+```{r}
+set.seed(7)
+```
+* Train Control
+
+trainControl is being set up to run the KNN-Algorithm
+
+```{r}
+knn_train_control <- trainControl(method="repeatedcv", number = 10, repeats = 3)
+```
+
+* KNN Model Fitting
+
+The model is being fit with the crime train data
+```{r}
+knn_fit <- train(
+  Sub_Crime ~.,
+  data = crime_train,
+  method = "knn",
+  tuneLength = 20,
+  trControl = knn_train_control)
+```
+
+* Faults prediction
+
+The fault of the test dataset is being predicted
+```{r}
+knn_prediction <- predict(knn_fit, newdata = crime_test)
+```
+
+
+* Confusion Matrix 
+
+Executing Confustion Matrix for KNN
+```{r}
+confusionMatrix(knn_prediction, crime_test$Sub_Crime)
+```
+
+* Accuracy of KNN-Classification
+
+The Accuracy for KNN is being computated
+```{r}
+knn_accuracy <- mean(knn_prediction == crime_test$Sub_Crime)
+knn_accuracy
+```
+
+* Accuracy plotting
+
+The accuracy with a different number of neigbors is being plot. The variance of the accurancy is being displayed
+
+```{r}
+plot(knn_fit, xlab = "Number of Neighbors", ylab = "Accuracy", main = "K-Nearest Neighbors")
+```
+
+** The higher the number of neighbors the slightly higher is the accuracy (positive correlation)**
+
+# 2. Random Forest Classifier
+
+First a seed needs to be set in order to make results replicable
+
+```{r}
+set.seed(12)
+```
+* Random Forest model fitting
+
+The Random model is being fit with the crime train data by using the 'ranger' method
+```{r}
+rf_fit <- train(Sub_Crime ~ .,
+                data = crime_train,
+                method = "ranger")
+```
+
+* Faults prediction
+
+The prediction of the fault is being predicted
+
+```{r}
+rf_prediction <- predict(rf_fit, crime_test)
+```
+
+* Confusion Matrix
+
+Executing the confusion matrix
+```{r}
+confusionMatrix(rf_prediction, crime_test$Sub_Crime)
+```
+
+* Correlation Matrix with its plotting
+
+Executing the correlation matrix with rcorr and plotting the result to disply correlation between variables
+
+```{r message=FALSE, warning=FALSE}
+corr_matrix <- crime_class[, sapply(crime_class, is.numeric)]
+cor(corr_matrix, use ="complete.obs", method="pearson")
+corrplot(corrgram(corr_matrix, method="number"))
+```
+
+* Accuruacy of Random Forest Classifier
+
+The accuracy of the Random Forrest Classifier is being computated
+```{r}
+rf_accuracy <- mean(rf_prediction == crime_test$Sub_Crime)
+rf_accuracy
+```
+
+## Hyperparameter tuning
+
+Before starting with the hyperparameter tuning the classifier with the highest score has to be selected. Therefore, the accuracy between the two classifiers **KNN and Random Forest** are being compared
+
+```{r}
+comparison_accuracy <- data.frame(c("KNN", "Random Forest"), c(knn_accuracy, rf_accuracy))
+comparison_accuracy
+```
+
+As a result the Random Forest classifier has an higher accuracy score. Thus, the Hyperparamater tuning is applied to this classifier.
+
+For the Hyperparameter tuning Random Search and Grid Search CV have been selected
+
+# 1. Random Search
+
+*First a seed needs to be set in order to make results replicable
+
+```{r}
+set.seed(70)
+```
+                                                  
+*Set trainControl
+
+```{r}
+random_control <- trainControl(method='repeatedcv', number=5, repeats=2, search = 'random')
+```
+
+*Fit Random Ranger
+
+10 random values of mtry at each time tuning
+
+```{r}
+fit_random_ranger <- train(Sub_Crime ~ .,
+                   data = crime_train,
+                   method = 'ranger',
+                   metric = 'Accuracy',
+                   tuneLength  = 10, 
+                   trControl = random_control)
+print(fit_random_ranger)
+```
+
+
+# 2. Grid Search CV
+
+*First a seed needs to be set in order to make results replicable
+
+```{r}
+set.seed(70)
+```
+
+* Definition of tune grid parameters
+
+```{r}
+tune_grid <- expand.grid(mtry = c(2, 3, 4, 5), splitrule = c("extratrees", "gini"), min.node.size= c(1,2))
+```
+
+```{r}
+fit_tunegrid_ranger <- train(
+  as.factor(Sub_Crime) ~.,
+  tuneLength = 1,
+  data = crime_train, 
+  method = "ranger",
+  trControl = trainControl(
+    method = "cv", 
+    number = 5, 
+    verboseIter = TRUE),
+  tuneGrid = tune_grid
+)
+```
+
+* Fit Ranger
+
+```{r}
+fit_tunegrid_ranger
+```
+
+* Plotting Grid Search CV Results
+```{r}
+plot(fit_tunegrid_ranger, xlab = "Randomly Selected Predictors", ylab = "Accuracy", main= "Tune Grid Result")
+```
+
+
+## Conclusion and Model evaluation
+
+**I managed to perform the model and applied the necassary ML Algortihms. The Random Forest Classification was the fastest, most stable and most accurate, followed by the kNN-Neighbour Classifier.**
+
+**KNN with an accuracy of almost 100% shows that there is a great dependency between the features due to overfitting**
+
+```{r}
+comparison_accuracy <- data.frame(c("KNN", "Random Forest"), c(knn_accuracy, rf_accuracy))
+comparison_accuracy
+```
+
+
+
+
+
+
+
+
+
